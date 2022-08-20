@@ -1,5 +1,6 @@
 import bpy
 from bpy.props import *
+import bpy_extras
 import array
 import mathutils
 import math
@@ -127,7 +128,7 @@ def ReadPHXBN(file_path, mesh_obj):
     
     mesh = mesh_obj.data
     
-    num_faces = len(mesh.faces)
+    num_faces = len(mesh.polygons)
     num_verts = num_faces * 3
     #print ("Loading ", num_verts, " bone weights and ids")
     file_bone_weights = array.array('f')
@@ -141,8 +142,8 @@ def ReadPHXBN(file_path, mesh_obj):
     for face_id in range(num_faces):
         for face_vert_num in range(3):
             for i in range(4):
-                data.bone_weights[mesh.faces[face_id].vertices[face_vert_num]*4+i] =file_bone_weights[face_id*12 + face_vert_num * 4 + i]
-                data.bone_ids[mesh.faces[face_id].vertices[face_vert_num]*4+i] =file_bone_ids[face_id*12 + face_vert_num * 4 + i]
+                data.bone_weights[mesh.polygons[face_id].vertices[face_vert_num]*4+i] =file_bone_weights[face_id*12 + face_vert_num * 4 + i]
+                data.bone_ids[mesh.polygons[face_id].vertices[face_vert_num]*4+i] =file_bone_ids[face_id*12 + face_vert_num * 4 + i]
      
     data.parent_ids.fromfile(file, num_bones[0])
         
@@ -198,11 +199,11 @@ def GetMeshMidpoint(data, mesh_obj):
     #        vert[i] = vert[i] + mid_point[i]
 
 def GetD6Mat(edit_bone):
-    vec = (edit_bone.tail - edit_bone.head).normalize()
+    vec = (edit_bone.tail - edit_bone.head).normalized()
     vec = Vector((vec[0], vec[2], -vec[1]))
     right = Vector((0.0001,1.0001,0.000003))
-    up = vec.cross(right).normalize()
-    right = up.cross(vec).normalize()
+    up = vec.cross(right).normalized()
+    right = up.cross(vec).normalized()
 
     return [right[0], right[1], right[2], 0,
             up[0], up[1], up[2], 0,
@@ -269,9 +270,9 @@ def AddAmotorJoint(arm_obj,joint):
     joint_axis = Vector((matrix[0], -matrix[2], matrix[1]))
     
     mat = arm_obj.matrix_world * child.matrix
-    x_axis = Vector((mat[0][0], mat[0][1], mat[0][2])).normalize()
-    y_axis = Vector((mat[2][0], mat[2][1], mat[2][2])).normalize()
-    joint_conv = Vector((-x_axis.dot(joint_axis), -y_axis.dot(joint_axis), 0)).normalize()
+    x_axis = Vector((mat[0][0], mat[0][1], mat[0][2])).normalized()
+    y_axis = Vector((mat[2][0], mat[2][1], mat[2][2])).normalized()
+    joint_conv = Vector((-x_axis.dot(joint_axis), -y_axis.dot(joint_axis), 0)).normalized()
     roll = math.atan2(joint_conv[0], joint_conv[1])
     arm_obj.data.edit_bones[child.name].roll += roll
     
@@ -322,10 +323,10 @@ def AddHingeJoint(arm_obj,joint):
     if parented == False:
         constraint.name = joint_bones[0].name
     
-    mat = arm_obj.matrix_world * child.matrix
-    x_axis = Vector((mat[0][0], mat[0][1], mat[0][2])).normalize()
-    y_axis = Vector((mat[2][0], mat[2][1], mat[2][2])).normalize()
-    joint_conv = Vector((x_axis.dot(joint_axis), y_axis.dot(joint_axis), 0)).normalize()
+    mat = arm_obj.matrix_world @ child.matrix
+    x_axis = Vector((mat[0][0], mat[0][1], mat[0][2])).normalized()
+    y_axis = Vector((mat[2][0], mat[2][1], mat[2][2])).normalized()
+    joint_conv = Vector((x_axis.dot(joint_axis), y_axis.dot(joint_axis), 0)).normalized()
     roll = math.atan2(joint_conv[0], joint_conv[1]) + math.pi / 2
     arm_obj.data.edit_bones[child.name].roll += roll
     
@@ -363,25 +364,24 @@ def AddHingeJoint(arm_obj,joint):
 def AddArmature(data, mesh_obj):
     scn = bpy.context.scene
     for ob in scn.objects:
-        ob.select = False
+        ob.select_set(False)
     
     mid_point = GetMeshMidpoint(data, mesh_obj)
     
     arm_data = bpy.data.armatures.new("MyPHXBN")
-    arm_data.use_auto_ik = True
+    #arm_data.use_auto_ik = True
     arm_obj = bpy.data.objects.new("MyPHXBN",arm_data)
-    scn.objects.link(arm_obj)
-    arm_obj.select = True
+    scn.collection.objects.link(arm_obj)
+    arm_obj.select_set(True)
     arm_obj.location = mid_point
-    scn.objects.active = arm_obj
+    bpy.context.view_layer.objects.active = arm_obj
     
     arm_data["version"] = data.version[0]
     arm_data["rigging_stage"] = data.rigging_stage[0]
     
-    bpy.ops.object.mode_set(mode='EDIT')
-
+    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
     bpy.ops.armature.delete()
-    bpy.ops.armature.select_all()
+    bpy.ops.armature.select_all(action='SELECT')
     bpy.ops.armature.delete()
     
     mesh = mesh_obj.data
@@ -441,16 +441,20 @@ def AddArmature(data, mesh_obj):
             arm_data.edit_bones[name].parent = arm_data.edit_bones["root"]
         num = num + 1
         
-    bpy.context.scene.update()
+    bpy.context.view_layer.update()
     
-    bpy.ops.object.mode_set(mode='OBJECT')
-    bpy.context.scene.objects.active = mesh_obj
-    bpy.ops.object.vertex_group_remove(all=True)
+    mesh_obj.select_set(True)
+    bpy.context.view_layer.objects.active = mesh_obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.object.vertex_group_remove_from(use_all_groups=True)
+    
     
     vertgroup_created=[]
     for bone in data.bones:
         vertgroup_created.append(0)
 
+    bpy.ops.object.mode_set(mode='OBJECT')
     mesh = mesh_obj.data
     index = 0
     vert_index = 0
@@ -461,21 +465,22 @@ def AddArmature(data, mesh_obj):
             name = "Bone_"+str(bone_id);
             if vertgroup_created[bone_id]==0:
                 vertgroup_created[bone_id]=1
-                mesh_obj.vertex_groups.new(name)
+                mesh_obj.vertex_groups.new(name=name)
             #assign the weight for this vertex
-            mesh_obj.vertex_groups.assign([vert_index], 
-                                     mesh_obj.vertex_groups[name], 
-                                     bone_weight, 
-                                     'REPLACE')
+            mesh_obj.vertex_groups[name].add([vert_index], bone_weight, 'REPLACE')
+            #mesh_obj.vertex_groups.assign([vert_index], 
+            #                         mesh_obj.vertex_groups[name], 
+            #                         bone_weight, 
+            #                         'REPLACE')
             index = index + 1
         vert_index = vert_index + 1
     mesh.update()
         
-    mesh_obj.select = True
-    scn.objects.active = arm_obj
+    mesh_obj.select_set(True)
+    bpy.context.view_layer.objects.active = arm_obj
     bpy.ops.object.parent_set(type='ARMATURE')
     #arm_obj.makeParentDeform([mesh_obj], 0, 0)
-    arm_obj.show_x_ray = True
+    arm_obj.show_in_front = True
     
     def ncr(n, r):
         return math.factorial(n) / \
@@ -530,7 +535,8 @@ def Load(filepath):
    
     AddArmature(data, mesh_obj)
     
-class PHXBNImporter(bpy.types.Operator):
+  
+class PHXBNImporter(bpy.types.Operator, bpy_extras.io_utils.ImportHelper):
     '''Load Phoenix Bones armature'''
     bl_idname = "import_armature.phxbn"
     bl_label = "Import PHXBN"
@@ -551,10 +557,10 @@ class PHXBNImporter(bpy.types.Operator):
 
         return {'FINISHED'}
 
-    def invoke(self, context, event):
-        wm = context.window_manager
-        wm.add_fileselect(self)
-        return {'RUNNING_MODAL'}
+    #def invoke(self, context, event):
+    #    wm = context.window_manager
+    #    wm.add_fileselect(self)
+    #    return {'RUNNING_MODAL'}
         
 #Load("C:\\Users\\David\\Desktop\\Wolfire SVN\\Project\\Data\\Skeletons\\basic-attached-guard-joints.phxbn")
 #Load("C:\\Users\\David\\Desktop\\export.phxbn")

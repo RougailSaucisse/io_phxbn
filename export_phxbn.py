@@ -1,5 +1,6 @@
 import array
 import bpy
+import bpy_extras
 from bpy.props import *
 from io_phxbn import phxbn_types
 from mathutils import Vector, Matrix
@@ -30,7 +31,7 @@ def UnCenterArmatureInMesh(data, mesh_obj):
     for i in range(3):
         mid_point[i] = ((min_point[i] + max_point[i]) * 0.5)
     
-    mid_point = mesh_obj.matrix_world * mid_point;
+    mid_point = mesh_obj.matrix_world @ mid_point;
     
     #print("Midpoint: ",mid_point)
     
@@ -66,7 +67,7 @@ def AddConnectingBones(arm_obj):
             bone.parent = new_bone
             new_bones.append(new_bone.name) 
     
-    bpy.context.scene.update()
+    bpy.context.view_layer.update()
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.mode_set(mode='EDIT')
  
@@ -189,10 +190,10 @@ def GetParents(data):
     data["parents"] = parents
     
 def GetBoneMatZ(edit_bone):
-    z_vec = (edit_bone.tail - edit_bone.head).normalize()
+    z_vec = (edit_bone.tail - edit_bone.head).normalized()
     x_vec = Vector((0,0,1))
-    y_vec = x_vec.cross(z_vec).normalize()
-    x_vec = y_vec.cross(z_vec).normalize()
+    y_vec = x_vec.cross(z_vec).normalized()
+    x_vec = y_vec.cross(z_vec).normalized()
 
     return [x_vec[0], x_vec[2], -x_vec[1], 0,
             y_vec[0], y_vec[2], -y_vec[1], 0,
@@ -201,12 +202,12 @@ def GetBoneMatZ(edit_bone):
 
 
 def GetBoneMat(edit_bone):
-    z_vec = (edit_bone.tail - edit_bone.head).normalize()
+    z_vec = (edit_bone.tail - edit_bone.head).normalized()
     y_vec = Vector((0,1,0))
     if abs(z_vec.dot(y_vec)) > 0.95:
         return GetBoneMatZ(edit_bone)
-    x_vec = z_vec.cross(y_vec).normalize()
-    y_vec = z_vec.cross(x_vec).normalize()
+    x_vec = z_vec.cross(y_vec).normalized()
+    y_vec = z_vec.cross(x_vec).normalized()
 
     return [x_vec[0], x_vec[2], -x_vec[1], 0,
             y_vec[0], y_vec[2], -y_vec[1], 0,
@@ -250,8 +251,8 @@ def GetJoints(arm_obj, name_shift):
                     joints.append(joint)
                 if freedom == 1:
                     joint.type.append(phxbn_types._hinge_joint)
-                    mat = arm_obj.matrix_world * bone.matrix
-                    axis = Vector((mat[0][0], mat[0][1], mat[0][2])).normalize()
+                    mat = arm_obj.matrix_world @ bone.matrix
+                    axis = Vector((mat[0][0], mat[0][1], mat[0][2])).normalized()
                     joint.axis.append(axis[0])
                     joint.axis.append(axis[2])
                     joint.axis.append(-axis[1])
@@ -304,7 +305,7 @@ def GetIKBones(arm_obj, name_shift):
     
 def PHXBNFromArmature():
     scene = bpy.context.scene
-    old_armature_object = scene.objects.active
+    old_armature_object = bpy.context.view_layer.objects.active
     
     if not old_armature_object or old_armature_object.type != 'ARMATURE':
         print ("Must select armature before exporting PHXBN")
@@ -317,7 +318,7 @@ def PHXBNFromArmature():
     #Make a copy of the object so we don't mess up the original
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.duplicate()
-    arm_obj = scene.objects.active
+    arm_obj = bpy.context.view_layer.objects.active
     print ("Reading PHXBN from armature: ", arm_obj.name)
     
     #Set to edit mode so we can add connecting bones
@@ -488,19 +489,19 @@ def PHXBNFromArmature():
         count = count + 1
     
     #Store the vertex weights in the form of an array of face vertices
-    for face in mesh.faces:
+    for face in mesh.polygons:
         for j in range(3):
             for i in range(4):
                 index = face.vertices[j]*4+i
                 data.bone_ids.append(bone_ids[index])
                 data.bone_weights.append(bone_weights[index])
     
-    print("Num faces: ", len(mesh.faces))
+    print("Num polygons: ", len(mesh.polygons))
     print("Num bone weights: ", len(data.bone_weights))
     
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.delete()
-    scene.objects.active = old_armature_object
+    bpy.context.view_layer.objects.active = old_armature_object
             
     return data
     
@@ -575,7 +576,7 @@ def WritePHXBN(file_path, data):
         WriteInt(file, ik_bone.bone)
         WriteInt(file, ik_bone.chain)
         string_array = array.array("B")
-        string_array.fromstring(ik_bone.name.encode("utf-8"))
+        string_array.frombytes(ik_bone.name.encode("utf-8"))
         WriteInt(file, len(string_array))
         string_array.tofile(file)
         
@@ -587,7 +588,7 @@ def Save(filepath):
         return
     WritePHXBN(filepath, data)
     
-class PHXBNExporter(bpy.types.Operator):
+class PHXBNExporter(bpy.types.Operator, bpy_extras.io_utils.ExportHelper):
     '''Save Phoenix Bones armature'''
     bl_idname = "export_mesh.phxbn"
     bl_label = "Export PHXBN"
@@ -596,13 +597,10 @@ class PHXBNExporter(bpy.types.Operator):
     
     check_existing = BoolProperty(name="Check Existing", description="Check and warn on overwriting existing files", default=True, options={'HIDDEN'})
 
+    filename_ext = ".phxbn"
+
     def execute(self, context):
         Save(self.properties.filepath)
         return {'FINISHED'}
-
-    def invoke(self, context, event):
-        wm = context.window_manager
-        wm.add_fileselect(self)
-        return {'RUNNING_MODAL'}
 
 #Save("C:\\Users\\David\\Desktop\\export.phxbn")
